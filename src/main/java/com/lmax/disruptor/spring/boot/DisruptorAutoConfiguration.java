@@ -1,15 +1,26 @@
 package com.lmax.disruptor.spring.boot;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Map.Entry;
-import java.util.concurrent.ThreadFactory;
-
+import com.lmax.disruptor.*;
+import com.lmax.disruptor.dsl.Disruptor;
+import com.lmax.disruptor.dsl.ProducerType;
+import com.lmax.disruptor.spring.boot.annotation.EventRule;
+import com.lmax.disruptor.spring.boot.config.EventHandlerDefinition;
+import com.lmax.disruptor.spring.boot.config.Ini;
+import com.lmax.disruptor.spring.boot.context.DisruptorEventAwareProcessor;
+import com.lmax.disruptor.spring.boot.event.DisruptorApplicationEvent;
+import com.lmax.disruptor.spring.boot.event.DisruptorEvent;
+import com.lmax.disruptor.spring.boot.event.factory.DisruptorBindEventFactory;
+import com.lmax.disruptor.spring.boot.event.factory.DisruptorEventThreadFactory;
+import com.lmax.disruptor.spring.boot.event.handler.DisruptorEventDispatcher;
+import com.lmax.disruptor.spring.boot.event.handler.DisruptorHandler;
+import com.lmax.disruptor.spring.boot.event.handler.chain.HandlerChainManager;
+import com.lmax.disruptor.spring.boot.event.handler.chain.def.PathMatchingHandlerChainResolver;
+import com.lmax.disruptor.spring.boot.event.translator.DisruptorEventOneArgTranslator;
+import com.lmax.disruptor.spring.boot.event.translator.DisruptorEventThreeArgTranslator;
+import com.lmax.disruptor.spring.boot.event.translator.DisruptorEventTwoArgTranslator;
+import com.lmax.disruptor.spring.boot.util.DisruptorUtils;
+import com.lmax.disruptor.spring.boot.util.StringUtils;
+import com.lmax.disruptor.spring.boot.util.WaitStrategies;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeansException;
@@ -27,34 +38,9 @@ import org.springframework.core.OrderComparator;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.ObjectUtils;
 
-import com.lmax.disruptor.EventFactory;
-import com.lmax.disruptor.EventTranslatorOneArg;
-import com.lmax.disruptor.EventTranslatorThreeArg;
-import com.lmax.disruptor.EventTranslatorTwoArg;
-import com.lmax.disruptor.WaitStrategy;
-import com.lmax.disruptor.dsl.Disruptor;
-import com.lmax.disruptor.dsl.EventHandlerGroup;
-import com.lmax.disruptor.dsl.ProducerType;
-import com.lmax.disruptor.spring.boot.annotation.EventRule;
-import com.lmax.disruptor.spring.boot.config.EventHandlerDefinition;
-import com.lmax.disruptor.spring.boot.config.Ini;
-import com.lmax.disruptor.spring.boot.context.DisruptorEventAwareProcessor;
-import com.lmax.disruptor.spring.boot.event.DisruptorApplicationEvent;
-import com.lmax.disruptor.spring.boot.event.DisruptorEvent;
-import com.lmax.disruptor.spring.boot.event.factory.DisruptorBindEventFactory;
-import com.lmax.disruptor.spring.boot.event.factory.DisruptorEventThreadFactory;
-import com.lmax.disruptor.spring.boot.event.handler.DisruptorEventDispatcher;
-import com.lmax.disruptor.spring.boot.event.handler.DisruptorHandler;
-import com.lmax.disruptor.spring.boot.event.handler.Nameable;
-import com.lmax.disruptor.spring.boot.event.handler.chain.HandlerChainManager;
-import com.lmax.disruptor.spring.boot.event.handler.chain.def.DefaultHandlerChainManager;
-import com.lmax.disruptor.spring.boot.event.handler.chain.def.PathMatchingHandlerChainResolver;
-import com.lmax.disruptor.spring.boot.event.translator.DisruptorEventOneArgTranslator;
-import com.lmax.disruptor.spring.boot.event.translator.DisruptorEventThreeArgTranslator;
-import com.lmax.disruptor.spring.boot.event.translator.DisruptorEventTwoArgTranslator;
-import com.lmax.disruptor.spring.boot.hooks.DisruptorShutdownHook;
-import com.lmax.disruptor.spring.boot.util.StringUtils;
-import com.lmax.disruptor.spring.boot.util.WaitStrategys;
+import java.util.*;
+import java.util.Map.Entry;
+import java.util.concurrent.ThreadFactory;
 
 @Configuration
 @ConditionalOnClass({ Disruptor.class })
@@ -78,7 +64,7 @@ public class DisruptorAutoConfiguration implements ApplicationContextAware {
 	@Bean
 	@ConditionalOnMissingBean
 	public WaitStrategy waitStrategy() {
-		return WaitStrategys.YIELDING_WAIT;
+		return WaitStrategies.YIELDING_WAIT;
 	}
 
 	@Bean
@@ -112,6 +98,7 @@ public class DisruptorAutoConfiguration implements ApplicationContextAware {
 				}
 				
 				EventRule annotationType = getApplicationContext().findAnnotationOnBean(entry.getKey(), EventRule.class);
+
 				if(annotationType == null) {
 					// 注解为空，则打印错误信息
 					LOG.error("Not Found AnnotationType {0} on Bean {1} Whith Name {2}", EventRule.class, entry.getValue().getClass(), entry.getKey());
@@ -176,7 +163,7 @@ public class DisruptorAutoConfiguration implements ApplicationContextAware {
 			handlerChainDefinitionMap.putAll(handlerDefinition.getDefinitionMap());
 		}
 
-		HandlerChainManager<DisruptorEvent> manager = createHandlerChainManager(eventHandlers, handlerChainDefinitionMap);
+		HandlerChainManager<DisruptorEvent> manager = DisruptorUtils.createHandlerChainManager(eventHandlers, handlerChainDefinitionMap);
 		PathMatchingHandlerChainResolver chainResolver = new PathMatchingHandlerChainResolver();
 		chainResolver.setHandlerChainManager(manager);
 		return new DisruptorEventDispatcher(chainResolver, handlerDefinition.getOrder());
@@ -192,33 +179,7 @@ public class DisruptorAutoConfiguration implements ApplicationContextAware {
 		return section;
 	}
 
-	protected HandlerChainManager<DisruptorEvent> createHandlerChainManager(
-			Map<String, DisruptorHandler<DisruptorEvent>> eventHandlers,
-			Map<String, String> handlerChainDefinitionMap) {
 
-		HandlerChainManager<DisruptorEvent> manager = new DefaultHandlerChainManager();
-		if (!CollectionUtils.isEmpty(eventHandlers)) {
-			for (Map.Entry<String, DisruptorHandler<DisruptorEvent>> entry : eventHandlers.entrySet()) {
-				String name = entry.getKey();
-				DisruptorHandler<DisruptorEvent> handler = entry.getValue();
-				if (handler instanceof Nameable) {
-					((Nameable) handler).setName(name);
-				}
-				manager.addHandler(name, handler);
-			}
-		}
-
-		if (!CollectionUtils.isEmpty(handlerChainDefinitionMap)) {
-			for (Map.Entry<String, String> entry : handlerChainDefinitionMap.entrySet()) {
-				// ant匹配规则
-				String rule = entry.getKey();
-				String chainDefinition = entry.getValue();
-				manager.createChain(rule, chainDefinition);
-			}
-		}
-
-		return manager;
-	}
 
 	/**
 	 * 
@@ -248,47 +209,12 @@ public class DisruptorAutoConfiguration implements ApplicationContextAware {
 			EventFactory<DisruptorEvent> eventFactory,
 			@Qualifier("disruptorEventHandlers") 
 			List<DisruptorEventDispatcher> disruptorEventHandlers) {
-		
+
 		// http://blog.csdn.net/a314368439/article/details/72642653?utm_source=itdadao&utm_medium=referral
-			
-		Disruptor<DisruptorEvent> disruptor = null;
 		if (properties.isMultiProducer()) {
-			disruptor = new Disruptor<DisruptorEvent>(eventFactory, properties.getRingBufferSize(), threadFactory,
-					ProducerType.MULTI, waitStrategy);
-		} else {
-			disruptor = new Disruptor<DisruptorEvent>(eventFactory, properties.getRingBufferSize(), threadFactory,
-					ProducerType.SINGLE, waitStrategy);
+			return DisruptorUtils.createDisruptor(threadFactory, eventFactory, disruptorEventHandlers, properties.getRingBufferSize(), ProducerType.MULTI, waitStrategy);
 		}
-
-		if (!ObjectUtils.isEmpty(disruptorEventHandlers)) {
-			
-			// 进行排序
-			Collections.sort(disruptorEventHandlers, new OrderComparator());
-			
-			// 使用disruptor创建消费者组
-			EventHandlerGroup<DisruptorEvent> handlerGroup = null;
-			for (int i = 0; i < disruptorEventHandlers.size(); i++) {
-				// 连接消费事件方法，其中EventHandler的是为消费者消费消息的实现类
-				DisruptorEventDispatcher eventHandler = disruptorEventHandlers.get(i);
-				if(i < 1) {
-					handlerGroup = disruptor.handleEventsWith(eventHandler);
-				} else {
-					// 完成前置事件处理之后执行后置事件处理
-					handlerGroup.then(eventHandler);
-				}
-			}
-		}
-
-		// 启动
-		disruptor.start();
-
-		/**
-		 * 应用退出时，要调用shutdown来清理资源，关闭网络连接，从MetaQ服务器上注销自己
-		 * 注意：我们建议应用在JBOSS、Tomcat等容器的退出钩子里调用shutdown方法
-		 */
-		Runtime.getRuntime().addShutdownHook(new DisruptorShutdownHook(disruptor));
-
-		return disruptor;
+		return DisruptorUtils.createDisruptor(threadFactory, eventFactory, disruptorEventHandlers, properties.getRingBufferSize(), ProducerType.SINGLE, waitStrategy);
 
 	}
 	
@@ -309,10 +235,10 @@ public class DisruptorAutoConfiguration implements ApplicationContextAware {
 	public EventTranslatorThreeArg<DisruptorEvent, String, String, String> threeArgEventTranslator() {
 		return new DisruptorEventThreeArgTranslator();
 	}
-	
+
 	@Bean
-	public DisruptorTemplate disruptorTemplate() {
-		return new DisruptorTemplate();
+	public DisruptorTemplate disruptorTemplate(Disruptor disruptor, EventTranslatorOneArg<DisruptorEvent, DisruptorEvent> oneArgEventTranslator) {
+		return new DisruptorTemplate(disruptor, oneArgEventTranslator);
 	}
 	
 	@Bean

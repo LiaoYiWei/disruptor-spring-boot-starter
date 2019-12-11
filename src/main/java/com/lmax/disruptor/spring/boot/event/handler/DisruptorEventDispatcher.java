@@ -11,7 +11,7 @@ import com.lmax.disruptor.spring.boot.event.handler.chain.ProxiedHandlerChain;
 /**
  * Disruptor 事件分发实现
  */
-public class DisruptorEventDispatcher extends AbstractRouteableEventHandler<DisruptorEvent> implements EventHandler<DisruptorEvent>, Ordered {
+public class DisruptorEventDispatcher extends AbstractRoutableEventHandler<DisruptorEvent> implements EventHandler<DisruptorEvent>, Ordered {
 	
 	private int order = 0;
  
